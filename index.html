@@ -37,7 +37,7 @@ const DRONES={
 };
 const MODES=['Normal','Sport','FPV/Freestyle'], MODE_MULT=[1,1.38,1.7];
 const SCENES=['Горы','Мегаполис','Город'];
-const defaults={drone:'mavic',scene:2,mode:0,graphics:'medium',shadows:true,view:0,obstacles:true,maxAlt:10,maxRange:500,deadStick:.10,deadTrigger:.02,curve:['expo','expo','linear','linear','linear','linear'],sensitivity:1,gimbalSpeed:1.1,gimbalSmooth:7,triggerSmooth:9,triggerCurve:1.7,voice:true,language:'ru-RU',traffic:14,drawDistance:700,keys:{forward:'KeyW',back:'KeyS',left:'KeyA',right:'KeyD',yawL:'KeyQ',yawR:'KeyE',up:'Space',down:'ShiftLeft'}};
+const defaults={drone:'mavic',scene:2,mode:0,graphics:'medium',shadows:true,view:0,zoom:1,obstacles:true,maxAlt:10,maxRange:500,deadStick:.10,deadTrigger:.02,curve:['expo','expo','linear','linear','linear','linear'],sensitivity:1,gimbalSpeed:1.1,gimbalSmooth:7,triggerSmooth:9,triggerCurve:1.7,voice:true,language:'ru-RU',traffic:14,drawDistance:700,keys:{forward:'KeyW',back:'KeyS',left:'KeyA',right:'KeyD',yawL:'KeyQ',yawR:'KeyE',up:'Space',down:'ShiftLeft'}};
 let settings={...defaults,...JSON.parse(localStorage.getItem('djiweb-settings')||'{}')};let save=()=>localStorage.setItem('djiweb-settings',JSON.stringify(settings));
 let selectedDrone=DRONES[settings.drone],sceneObjects=[],obstacles=[],targets=[],route=[],trail=[],keys={},pad=null,calibration=JSON.parse(localStorage.getItem('djiweb-calibration')||'null');
 let state={pos:new THREE.Vector3(0,0,0),vel:new THREE.Vector3(),yaw:0,pitch:0,roll:0,gimbal:0,battery:100,home:new THREE.Vector3(0,0,0),flying:false,rth:false,quick:null,track:null,recording:false,paused:false,signal:100,zoom:1,view:settings.view,photoCount:0,emergency:false};
@@ -101,13 +101,12 @@ window.addEventListener('gamepadconnected',e=>{pad=e.gamepad;toast('Геймпа
 window.addEventListener('gamepaddisconnected',()=>{pad=null;toast('Геймпад отключён');});
 function pollPad(dt){let gp=navigator.getGamepads?.().find(g=>g&&g.connected);if(gp)pad=gp;if(!pad)return {yaw:0,throttle:0,pitch:0,roll:0,trigger:0};$('padStatus').textContent=pad.id.slice(0,18);if(calSession){sampleCalibration(pad);let el=$('calData');if(el)el.textContent='Сэмплов: '+calSession.samples+' · оси: '+pad.axes.map(v=>v.toFixed(2)).join(' / ')+' · кнопки: '+pad.buttons.map(b=>b.value.toFixed(2)).join(' / ');return {yaw:0,throttle:0,pitch:0,roll:0,trigger:0};}
 let axes=[0,1,2,3].map((_,i)=>curve(dead(normalizeAxis(pad,i),settings.deadStick),settings.curve[i]||'linear'));let btn=i=>pad.buttons[i]?.pressed||false;let rt=normalizeTrigger(pad,7),lt=normalizeTrigger(pad,6);rt=smooth(triggerFiltered[0],curve(dead(rt,settings.deadTrigger),'expo'),settings.triggerSmooth,dt);lt=smooth(triggerFiltered[1],curve(dead(lt,settings.deadTrigger),'expo'),dt);triggerFiltered=[rt,lt];let dpad=(a)=>btn(a);if(dpad(12))gimbalTarget=clamp(gimbalTarget+dt*35,-90,30);if(dpad(13))gimbalTarget=clamp(gimbalTarget-dt*35,-90,30);if(dpad(14))settings.zoom=clamp(settings.zoom-1,1,4);if(dpad(15))settings.zoom=clamp(settings.zoom+1,1,4);
-if(btn(5))setModeHold('next');if(btn(4))setModeHold('prev');
-if(btn(1)){hold.b+=dt;if(hold.b>.5&&!state.flying)takeoff();}else if(hold.b>0&&hold.b<=.5&&state.flying)land();else hold.b=0;
-if(btn(2)){let now=performance.now();if(now-lastA<360)emergencyStop();lastA=now;}
-if(btn(0)&&state.rth)cancelRTH();
-if(btn(3))photoAction();if(btn(9)&&!pressed.start){showPanel('settings');pressed.start=true;}if(!btn(9))pressed.start=false;if(btn(8)&&!pressed.select){toggleMap();pressed.select=true;}if(!btn(8))pressed.select=false;
-if(btn(1))hold.b=Math.min(.5,hold.b);else hold.b=0;
-if(btn(2)){};if(btn(0)&&!pressed.a){pressed.a=true;}if(!btn(0))pressed.a=false;
+if(btn(5)&&!pressed.rb){setMode(settings.mode+1);pressed.rb=true;}if(!btn(5))pressed.rb=false;if(btn(4)&&!pressed.lb){setMode(settings.mode+2);pressed.lb=true;}if(!btn(4))pressed.lb=false;
+if(btn(1)){hold.b+=dt;if(hold.b>.5&&!pressed.b){pressed.b=true;if(!state.flying)takeoff();}}else{if(hold.b>0&&hold.b<=.5&&state.flying)land();hold.b=0;pressed.b=false;}
+if(btn(2)){hold.x+=dt;if(hold.x>.5&&!pressed.x){pressed.x=true;if(state.rth)cancelRTH();else startRTH();}}else{hold.x=0;pressed.x=false;}
+if(btn(0)){let now=performance.now();if(!pressed.a&&now-lastA<360)emergencyStop();if(!pressed.a)lastA=now;pressed.a=true;}else pressed.a=false;
+if(btn(3)&&!pressed.y)photoAction();if(btn(3))pressed.y=true;else pressed.y=false;if(btn(9)&&!pressed.start){showPanel('settings');pressed.start=true;}if(!btn(9))pressed.start=false;if(btn(8)&&!pressed.select){toggleMap();pressed.select=true;}if(!btn(8))pressed.select=false;
+
 return {yaw:axes[0],throttle:-axes[1],roll:axes[2],pitch:-axes[3],trigger:rt-lt};}
 let modeHold={next:0,prev:0};function setModeHold(which){if(modeHold[which]===0){setMode(settings.mode+(which==='next'?1:2));modeHold[which]=1;}}
 /* === Триггеры RT/LT: отдельная кривая, deadzone и кинематографическое сглаживание === */
@@ -141,7 +140,6 @@ function updateHUD(){let h=state.pos.y,spd=Math.hypot(state.vel.x,state.vel.z);$
 function drawMap(){let c=$('map'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);ctx.fillStyle='#0a1820';ctx.fillRect(0,0,c.width,c.height);let scale=.38;ctx.strokeStyle='#28414c';for(let i=0;i<8;i++){ctx.beginPath();ctx.moveTo(i*34,0);ctx.lineTo(i*34,150);ctx.stroke();ctx.beginPath();ctx.moveTo(0,i*22);ctx.lineTo(240,i*22);ctx.stroke();}let x=120+(state.pos.x-state.home.x)*scale,z=75+(state.pos.z-state.home.z)*scale;ctx.strokeStyle='#54d7e8';ctx.lineWidth=2;ctx.beginPath();trail.forEach((p,i)=>{let px=120+(p.x-state.home.x)*scale,pz=75+(p.z-state.home.z)*scale;i?ctx.lineTo(px,pz):ctx.moveTo(px,pz)});ctx.stroke();ctx.fillStyle='#80e4a5';ctx.beginPath();ctx.arc(120,75,5,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.moveTo(x,z-7);ctx.lineTo(x-5,z+5);ctx.lineTo(x+5,z+5);ctx.closePath();ctx.fill();}
 function toggleMap(){$('right').classList.toggle('hidden-ui');}
 function animate(now){requestAnimationFrame(animate);let dt=Math.min(.05,(now-lastTime)/1000||0);lastTime=now;if(!state.paused){let input=controls(dt);accumulator+=dt;while(accumulator>=physicsStep){physics(physicsStep,input);accumulator-=physicsStep;}updateCamera(dt);updateHUD();}renderer.render(scene,camera);}
-requestAnimationFrame(animate);
 /* === Панели меню, настройки, QuickShots и FocusTrack === */
 function showModal(html){$('modal').classList.toggle('hidden',!html);$('dialog').innerHTML=html||'';}
 function showPanel(name){activePanel=name;let html='';if(name==='flight'){html='<h1>DJI Web Flight Simulator</h1><p class="muted">Браузерный симулятор полёта · Three.js</p><h3>Выбор дрона</h3><div class="grid">'+Object.entries(DRONES).map(([id,d])=>'<button class="choice '+(settings.drone===id?'active':'')+'" data-drone="'+id+'"><b>'+d.name+'</b><p class="help">'+d.mass+' кг · '+d.speed.join(' / ')+' м/с</p><span class="pill">'+d.battery+' мин (модель)</span></button>').join('')+'</div><h3>Сцена</h3><div class="grid">'+SCENES.map((s,i)=>'<button class="choice '+(settings.scene===i?'active':'')+'" data-scene="'+i+'">'+s+'</button>').join('')+'</div><div class="row"><button class="primary" id="launch">Продолжить полёт</button><button id="close">Закрыть</button></div>';}
@@ -166,15 +164,12 @@ document.querySelectorAll('[data-open]').forEach(b=>b.addEventListener('click',(
 $('takeoff').onclick=()=>state.flying?land():takeoff();$('rth').onclick=()=>state.rth?cancelRTH():startRTH();$('record').onclick=()=>state.recording?stopRecording():startRecording();$('photo').onclick=photoAction;$('view').onclick=cycleView;$('menu').onclick=()=>showPanel('flight');
 $('view').textContent='Камера: '+['FPV','Cine','Top'][state.view];
 /* === Клавиатурная поддержка удержаний и адаптивный рендер === */
-function extraButtons(dt){if(keys.KeyB){hold.b+=dt;if(hold.b>.5&&!state.flying)takeoff();}else{if(hold.b>0&&hold.b<=.5&&state.flying)land();hold.b=0;}if(keys.KeyX){hold.x+=dt;if(hold.x>.5&&!state.rth)startRTH();}else{hold.x=0;}if(keys.KeyN&&!pressed.n){setMode(settings.mode+1);pressed.n=true;}if(!keys.KeyN)pressed.n=false;}
+function extraButtons(dt){if(keys.KeyB){hold.b+=dt;if(hold.b>.5&&!pressed.kb){pressed.kb=true;if(!state.flying)takeoff();}}else{if(hold.b>0&&hold.b<=.5&&state.flying)land();hold.b=0;pressed.kb=false;}if(keys.KeyX){hold.x+=dt;if(hold.x>.5&&!pressed.kx){pressed.kx=true;if(state.rth)cancelRTH();else startRTH();}}else{hold.x=0;pressed.kx=false;}if(keys.KeyN&&!pressed.n){setMode(settings.mode+1);pressed.n=true;}if(!keys.KeyN)pressed.n=false;}
 const originalAnimate=animate;
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 /* Fixed-step loop wrapper: extra key holds, animated target traffic and pause state */
 let loop=()=>{requestAnimationFrame(loop);let now=performance.now(),dt=Math.min(.05,(now-lastTime)/1000||.016);lastTime=now;if(!state.paused){extraButtons(dt);targets.forEach((t,i)=>{t.group.position.x+=Math.sin(now*.00025+i)*.004;});let input=controls(dt);accumulator+=dt;while(accumulator>=physicsStep){physics(physicsStep,input);accumulator-=physicsStep;}updateCamera(dt);updateHUD();}renderer.render(scene,camera);};
-cancelAnimationFrame(0); // harmless: active loop is replaced by the dedicated loop below
-// Disable the initial requestAnimationFrame loop by using a single active-frame guard.
-let frameActive=true;
-// Start robust main loop; original callback self-schedules only until page refresh, so mark renderer loop state.
+// Единственный активный цикл рендеринга.
 loop();
 showPanel('flight');
 </script>
